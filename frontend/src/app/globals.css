@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #000000;
+    color: #fafafa;
+  }
+
+  /* Custom high-end scrollbar for editorial espionage feel */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    background: #020202;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    background: #1c1c1e;
+    border-radius: 3px;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    background: #dc2626;
+  }
+}
+
+/* Custom Scanline Terminal Overlay */
+.scanlines {
+  position: relative;
+  overflow: hidden;
+}
+
+.scanlines::before {
+  content: "";
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%, 
+    rgba(0, 0, 0, 0.25) 50%
+  );
+  background-size: 100% 4px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* Neon Glow Utility classes */
+.glow-cyan {
+  text-shadow: 0 0 10px rgba(34, 211, 238, 0.4), 0 0 20px rgba(34, 211, 238, 0.2);
+}
+
+.glow-red {
+  text-shadow: 0 0 10px rgba(220, 38, 38, 0.4), 0 0 20px rgba(220, 38, 38, 0.2);
+}
+
+.glow-amber {
+  text-shadow: 0 0 10px rgba(245, 158, 11, 0.4), 0 0 20px rgba(245, 158, 11, 0.2);
+}
+
+/* Editorial Serif Headline style */
+.editorial-title {
+  font-family: var(--font-instrument-serif), serif;
+  font-style: italic;
+  font-weight: 400;
+}
+
+/* Blur gradient containers */
+.glow-blur-red {
+  background: radial-gradient(circle, rgba(220,38,38,0.08) 0%, rgba(0,0,0,0) 70%);
+}
+
+.glow-blur-cyan {
+  background: radial-gradient(circle, rgba(34,211,238,0.08) 0%, rgba(0,0,0,0) 70%);
+}
+
+/* Custom terminal caret */
+.terminal-caret::after {
+  content: "▊";
+  color: #22d3ee;
+  animation: blink 1s step-end infinite;
+  margin-left: 4px;
+  vertical-align: middle;
+}
