@@ -5,6 +5,37 @@ import { getGenLayerClient, CONTRACT_ADDRESS } from '@/lib/genlayer-client';
 import { DEADDROP_ABI } from '@/lib/contract-abi';
 import CryptoJS from 'crypto-js';
 
+const safeLocalStorage = {
+  getItem: (key: string): string | null => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        return localStorage.getItem(key);
+      }
+    } catch (e) {
+      console.warn("Storage access denied", e);
+    }
+    return null;
+  },
+  setItem: (key: string, value: string): void => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem(key, value);
+      }
+    } catch (e) {
+      console.warn("Storage access denied", e);
+    }
+  },
+  removeItem: (key: string): void => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.removeItem(key);
+      }
+    } catch (e) {
+      console.warn("Storage access denied", e);
+    }
+  }
+};
+
 export interface LeakRecord {
   leak_id: string;
   title: string;
@@ -149,18 +180,18 @@ export const useStore = create<DeadDropState>((set, get) => ({
     if (typeof window === 'undefined') return;
 
     // Load or generate burner wallet
-    const storedBurner = localStorage.getItem('deaddrop_burner_key');
+    const storedBurner = safeLocalStorage.getItem('deaddrop_burner_key');
     if (storedBurner) {
       try {
         const wallet = new Wallet(storedBurner);
         set({ burnerWallet: { address: wallet.address, privateKey: wallet.privateKey } });
       } catch (e) {
-        localStorage.removeItem('deaddrop_burner_key');
+        safeLocalStorage.removeItem('deaddrop_burner_key');
       }
     } else {
       // Auto-generate one
       const wallet = Wallet.createRandom();
-      localStorage.setItem('deaddrop_burner_key', wallet.privateKey);
+      safeLocalStorage.setItem('deaddrop_burner_key', wallet.privateKey);
       set({ 
         burnerWallet: { 
           address: wallet.address, 
@@ -171,21 +202,21 @@ export const useStore = create<DeadDropState>((set, get) => ({
     }
 
     // Load or generate pseudonymous identity
-    const storedIdentity = localStorage.getItem('deaddrop_identity');
+    const storedIdentity = safeLocalStorage.getItem('deaddrop_identity');
     if (storedIdentity) {
       try {
         set({ pseudonymousIdentity: JSON.parse(storedIdentity) });
       } catch (e) {
-        localStorage.removeItem('deaddrop_identity');
+        safeLocalStorage.removeItem('deaddrop_identity');
       }
     } else {
       const identity = generatePseudonymousIdentity();
-      localStorage.setItem('deaddrop_identity', JSON.stringify(identity));
+      safeLocalStorage.setItem('deaddrop_identity', JSON.stringify(identity));
       set({ pseudonymousIdentity: identity });
     }
 
     // Check checklist status
-    const storedChecklist = localStorage.getItem('deaddrop_checklist');
+    const storedChecklist = safeLocalStorage.getItem('deaddrop_checklist');
     set({ securityChecklistCompleted: storedChecklist === 'true' });
 
     // Initial data fetches
@@ -200,7 +231,7 @@ export const useStore = create<DeadDropState>((set, get) => ({
   generateNewBurnerWallet: () => {
     if (typeof window === 'undefined') return;
     const wallet = Wallet.createRandom();
-    localStorage.setItem('deaddrop_burner_key', wallet.privateKey);
+    safeLocalStorage.setItem('deaddrop_burner_key', wallet.privateKey);
     set({ 
       burnerWallet: { 
         address: wallet.address, 
@@ -236,14 +267,14 @@ export const useStore = create<DeadDropState>((set, get) => ({
 
   setChecklistCompleted: (val: boolean) => {
     if (typeof window === 'undefined') return;
-    localStorage.setItem('deaddrop_checklist', val ? 'true' : 'false');
+    safeLocalStorage.setItem('deaddrop_checklist', val ? 'true' : 'false');
     set({ securityChecklistCompleted: val });
   },
 
   rotatePseudonymousIdentity: () => {
     if (typeof window === 'undefined') return;
     const identity = generatePseudonymousIdentity();
-    localStorage.setItem('deaddrop_identity', JSON.stringify(identity));
+    safeLocalStorage.setItem('deaddrop_identity', JSON.stringify(identity));
     set({ pseudonymousIdentity: identity });
   },
 
