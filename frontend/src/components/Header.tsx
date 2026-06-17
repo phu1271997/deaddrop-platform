@@ -21,7 +21,9 @@ export default function Header() {
     { name: 'SUBMIT LEAK', path: '/submit' },
     { name: 'ARCHIVE', path: '/leaks' },
     { name: 'BOUNTIES', path: '/bounty' },
+    { name: 'TREASURY', path: '/treasury' },
     { name: 'VERIFY HASH', path: '/verify' },
+    { name: 'DEMO SCENARIOS', path: '/demo' },
   ];
 
   if (!mounted) {

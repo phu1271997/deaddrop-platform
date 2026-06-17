@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono, Instrument_Serif } from "next/font/google";
 import "./globals.css";
+import ContractInfoBanner from "@/components/ContractInfoBanner";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -57,6 +58,7 @@ export default function RootLayout({
         <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-cyber/5 blur-[150px] pointer-events-none" />
 
         <main className="relative z-10">
+          <ContractInfoBanner />
           {children}
         </main>
       </body>

@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useStore, LeakRecord } from '@/store/useStore';
 import Header from '@/components/Header';
 import AIVerdictDisplay from '@/components/AIVerdictDisplay';
+import ChainVerifyButton from '@/components/ChainVerifyButton';
 import { useParams } from 'next/navigation';
 import { Calendar, User, FileText, ArrowLeft, ExternalLink, ShieldCheck, Cpu, Award, Download, Copy, Check } from 'lucide-react';
 import Link from 'next/link';
@@ -132,6 +133,9 @@ export default function LeakDetail() {
         {/* AI Forensic Verdict Display */}
         <AIVerdictDisplay verdict={leak} />
 
+        {/* On-Chain Verification Trigger */}
+        <ChainVerifyButton leakId={leak.leak_id} localData={leak} />
+
         {/* Evidence Coordinates list */}
         <div className="p-4 bg-background-card border border-background-border rounded-lg space-y-4">
           <span className="text-zinc-400 text-[10px] uppercase font-bold tracking-widest block">
@@ -208,6 +212,24 @@ export default function LeakDetail() {
             </div>
           </div>
         </div>
+
+        {/* Appeal section for rejected leaks */}
+        {leak.status === 'REJECTED' && (
+          <div className="p-5 bg-zinc-950 border border-primary/40 rounded-lg space-y-3">
+            <span className="text-primary text-[10px] uppercase font-bold tracking-widest block flex items-center gap-1.5 animate-pulse">
+              ⚠️ SUBMISSION DISPUTE & APPEAL ACTIVE
+            </span>
+            <p className="text-zinc-400 font-sans leading-relaxed text-xs">
+              This leak has been rejected by AI validator consensus. The source or any contributor has 7 days from the time of submission to file an appeal. Appealing requires staking 5 GEN as collateral and providing additional verified evidence links.
+            </p>
+            <Link
+              href={`/appeal/${leak.leak_id}`}
+              className="mt-2 inline-block w-full py-2.5 px-4 bg-primary hover:bg-primary/95 text-white text-center font-bold uppercase tracking-widest rounded border border-primary transition-all shadow-red-glow"
+            >
+              File On-Chain Appeal
+            </Link>
+          </div>
+        )}
 
         {/* Journalist matrix toolkit */}
         <div className="p-5 bg-zinc-950 border border-primary/20 rounded-lg space-y-4">

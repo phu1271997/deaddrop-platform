@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useStore, LeakRecord } from '@/store/useStore';
 import Header from '@/components/Header';
 import { hashDocument } from '@/lib/crypto-utils';
+import { getGenLayerClient, CONTRACT_ADDRESS } from '@/lib/genlayer-client';
 import { UploadCloud, Search, ShieldCheck, ShieldAlert, Cpu, Award, Calendar, FileText, ChevronRight, Copy, Check } from 'lucide-react';
 import Link from 'next/link';
 import AIVerdictDisplay from '@/components/AIVerdictDisplay';
@@ -39,17 +40,59 @@ export default function VerificationTool() {
   }
 
   // Handle manual hash lookups
-  const handleHashSearch = (hashToLookup: string) => {
+  const handleHashSearch = async (hashToLookup: string) => {
     if (!hashToLookup || hashToLookup.length !== 64) {
       alert("Please enter a valid 64-character SHA-256 hex hash.");
       return;
     }
     
     setSearchExecuted(true);
-    const match = verifiedLeaks.find(
-      l => l.document_hash === hashToLookup || l.leak_id === hashToLookup
-    );
-    setMatchedLeak(match || null);
+    setMatchedLeak(null);
+
+    try {
+      const glClient = getGenLayerClient();
+      
+      if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
+        const match = verifiedLeaks.find(
+          l => l.document_hash === hashToLookup || l.leak_id === hashToLookup
+        );
+        setMatchedLeak(match || null);
+        return;
+      }
+
+      // Query verify_document_hash view call
+      const matchesJsonStr = await glClient.readContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'verify_document_hash',
+        args: [hashToLookup]
+      }) as string;
+
+      if (matchesJsonStr && matchesJsonStr !== "[]") {
+        const matches = JSON.parse(matchesJsonStr);
+        if (Array.isArray(matches) && matches.length > 0) {
+          setMatchedLeak(matches[0]);
+          return;
+        }
+      }
+
+      // Fallback: Query leak directly by ID if user pasted leak_id instead of document_hash
+      const leakStr = await glClient.readContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'get_leak',
+        args: [hashToLookup]
+      }) as string;
+
+      if (leakStr && leakStr !== "") {
+        setMatchedLeak(JSON.parse(leakStr));
+      }
+    } catch (e) {
+      console.error("On-chain lookup error:", e);
+      // fallback locally
+      const match = verifiedLeaks.find(
+        l => l.document_hash === hashToLookup || l.leak_id === hashToLookup
+      );
+      setMatchedLeak(match || null);
+    }
   };
 
   // Drag Drop handlers

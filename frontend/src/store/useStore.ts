@@ -3,6 +3,7 @@ import { Wallet } from 'ethers';
 import { generatePseudonymousIdentity } from '@/lib/crypto-utils';
 import { getGenLayerClient, CONTRACT_ADDRESS } from '@/lib/genlayer-client';
 import { DEADDROP_ABI } from '@/lib/contract-abi';
+import CryptoJS from 'crypto-js';
 
 export interface LeakRecord {
   leak_id: string;
@@ -70,6 +71,13 @@ interface DeadDropState {
     evidenceUrls: string[],
     documentHash: string
   ) => Promise<{ success: boolean; leakId: string; error?: string; record?: LeakRecord }>;
+  claimBountyCommit: (leakId: string, seed: string) => Promise<{ success: boolean; commitHash?: string; error?: string }>;
+  claimBountyReveal: (leakId: string, seed: string) => Promise<{ success: boolean; error?: string }>;
+  withdrawBounty: () => Promise<{ success: boolean; amount?: string; error?: string }>;
+  getWithdrawableBalance: (address: string) => Promise<string>;
+  fundLeakBounty: (leakId: string, amount: string) => Promise<{ success: boolean; error?: string }>;
+  fundBountyPool: (category: string, amount: string) => Promise<{ success: boolean; error?: string }>;
+  appealRejection: (leakId: string, additionalEvidenceUrls: string[]) => Promise<{ success: boolean; error?: string }>;
 }
 
 // Fallback dummy records for rich local testing if CONTRACT_ADDRESS is unconfigured or read fails
@@ -302,7 +310,7 @@ export const useStore = create<DeadDropState>((set, get) => ({
     const addLog = get().addTerminalLog;
 
     addLog("[SYSTEM] INITIALIZING DEADDROP PLATFORM...");
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 600));
 
     // Get submission wallet credentials
     const isAnon = get().isAnonymousMode;
@@ -334,49 +342,47 @@ export const useStore = create<DeadDropState>((set, get) => ({
       senderAddress = metaMask;
       addLog(`[WARNING] CONNECTED EXTERNAL WALLET: ${senderAddress}`);
     }
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 400));
 
-    // Generate random leakId
-    const randArray = new Uint8Array(32);
-    window.crypto.getRandomValues(randArray);
-    const leakId = Array.from(randArray).map(b => b.toString(16).padStart(2, '0')).join('');
+    // Generate deterministic leakId from fields
+    const leakId = CryptoJS.SHA256(title + summary + targetEntity + documentHash + identity.pubkey).toString(CryptoJS.enc.Hex);
 
     addLog(`[CRYPTOGRAPHY] COMPUTED LEAK HASH: ${leakId}`);
     addLog(`[CRYPTOGRAPHY] VERIFIED CLIENT-SIDE DOCUMENT HASH: ${documentHash}`);
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 500));
 
     addLog("[NETWORK] SCANNING EVIDENCE EVIDENCE URLS...");
     evidenceUrls.forEach((url, i) => {
       addLog(`[NETWORK] STAGING EVIDENCE URL [${i + 1}]: ${url}`);
     });
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 600));
 
     addLog("[INTELLIGENT CONTRACT] CALLING submit_leak ON GENLAYER...");
     addLog("[INTELLIGENT CONTRACT] WAITING FOR CONSENSUS LEADER PROPOSAL...");
-    await new Promise(r => setTimeout(r, 1200));
+    await new Promise(r => setTimeout(r, 800));
 
     addLog("[AI GATEKEEPER] LEADER NODE INITIALIZING FORENSIC AUDIT PROMPT...");
     addLog("[AI GATEKEEPER] SCRAPING TARGET RECORDS (SEC EDGAR, NEWS)...");
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 1000));
 
     addLog("[AI GATEKEEPER] EXECUTING LLM FORENSIC EVALUATION...");
-    await new Promise(r => setTimeout(r, 1500));
-
     addLog("[CONSENSUS] BROADCASTING LEADER REPORT TO INDEPENDENT VALIDATORS...");
     addLog("[CONSENSUS] EXECUTING OPTIMISTIC DEMOCRACY EVALUATION...");
     await new Promise(r => setTimeout(r, 1000));
 
-    // Simulate blockchain write
+    let leakData: any = null;
+    let txHash = "";
+
     try {
       const glClient = getGenLayerClient(signingPrivateKey);
       
-      // If CONTRACT_ADDRESS is the default mock address or RPC fails, fall back gracefully to a mock on-chain success
+      // If CONTRACT_ADDRESS is default mock address, skip blockchain write and use fallback
       if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
         throw new Error("Mock contract address fallback triggered");
       }
 
       // Live on-chain write
-      const txHash = await glClient.writeContract({
+      txHash = await glClient.writeContract({
         address: CONTRACT_ADDRESS as `0x${string}`,
         functionName: 'submit_leak',
         args: [
@@ -393,62 +399,111 @@ export const useStore = create<DeadDropState>((set, get) => ({
       });
 
       addLog(`[TX] BROADCASTED TRANSACTION HASH: ${txHash}`);
-      addLog("[TX] WAITING FOR TRANSACTION FINALITY...");
+      addLog("[TX] WAITING FOR TRANSACTION FINALITY (CONSENSUS)...");
 
       // Wait for consensus finality
-      await new Promise(r => setTimeout(r, 1000));
-      addLog("[CONSENSUS] TRANSACTION FINALIZED!");
+      try {
+        await glClient.waitForTransactionReceipt({
+          hash: txHash as any,
+          status: "FINALIZED" as any,
+          retries: 45, // ~135 seconds max
+          interval: 3000
+        });
+        addLog("[CONSENSUS] TRANSACTION FINALIZED!");
+      } catch (timeoutErr) {
+        addLog("[WARNING] Wait receipt timed out. Initiating fallback polling...");
+      }
+
+      // Read finalized leak from chain with polling fallback
+      addLog("[INTELLIGENT CONTRACT] READING AUDITED VERDICT FROM BLOCKCHAIN...");
+      for (let attempt = 0; attempt < 30; attempt++) {
+        try {
+          const leakDataStr = await glClient.readContract({
+            address: CONTRACT_ADDRESS as `0x${string}`,
+            functionName: 'get_leak',
+            args: [leakId]
+          }) as string;
+          
+          if (leakDataStr && leakDataStr !== "") {
+            leakData = JSON.parse(leakDataStr);
+            break;
+          }
+        } catch (readErr) {
+          // ignore read error and retry
+        }
+        await new Promise(r => setTimeout(r, 3000));
+      }
     } catch (e) {
-      addLog("[MOCK] RUNNING MOCK CONSENSUS SIMULATOR (DEV LOCAL TESTING)...");
+      addLog("[MOCK] LOCAL TESTNET FALLBACK: GENERATING SIMULATED VERDICT...");
+      await new Promise(r => setTimeout(r, 1000));
+      
+      const isRejected = title.toLowerCase().includes("fake") || summary.toLowerCase().includes("spam") || summary.length < 50;
+      const score = isRejected ? 23 : 89;
+      const pubInterest = isRejected ? 12 : 92;
+      const status = (score >= 70 && pubInterest >= 50) ? "VERIFIED" : "REJECTED";
+
+      leakData = {
+        leak_id: leakId,
+        title: title,
+        category: category,
+        target_entity: targetEntity,
+        summary: summary,
+        evidence_urls: evidenceUrls,
+        document_hash: documentHash,
+        submitter_pubkey: identity.pubkey,
+        submission_timestamp: Math.floor(Date.now() / 1000),
+        status: status,
+        credibility_score: score,
+        public_interest_score: pubInterest,
+        ai_reasoning: isRejected 
+          ? "REJECTED due to massive forensic red flags. The summary is extremely brief, lacks specific dates, and contains spelling errors."
+          : `VERIFIED with high confidence. The submission offers verifiable claims. Cross-referencing ${targetEntity} against public filings confirms operational activity.`,
+        red_flags: isRejected ? ["Lacks specific names/dates", "Extremely short summary"] : [],
+        recommended_followup: isRejected ? "Do not investigate." : "Review internal harbor registries for specific logistics tags.",
+        estimated_impact: isRejected ? 'LOW' : 'CRITICAL'
+      };
     }
 
-    await new Promise(r => setTimeout(r, 600));
+    if (!leakData) {
+      set({ isSubmitting: false });
+      return { success: false, leakId, error: "Failed to retrieve verified leak from contract consensus." };
+    }
 
-    // Generate simulated/actual result
-    // To make it fun, let's make it verify unless it has corporate finance spam or if user types a funny string
-    const isRejected = title.toLowerCase().includes("fake") || summary.toLowerCase().includes("spam") || summary.length < 50;
-    
-    const score = isRejected ? 23 : 89;
-    const pubInterest = isRejected ? 12 : 92;
-    const status = (score >= 70 && pubInterest >= 50) ? "VERIFIED" : "REJECTED";
-
-    const simulatedRecord: LeakRecord = {
-      leak_id: leakId,
-      title: title,
-      category: category,
-      target_entity: targetEntity,
-      summary: summary,
-      evidence_urls: evidenceUrls,
-      document_hash: documentHash,
-      submitter_pubkey: identity.pubkey,
-      submission_timestamp: Math.floor(Date.now() / 1000),
-      status: status,
-      credibility_score: score,
-      public_interest_score: pubInterest,
-      ai_verdict: status,
-      ai_reasoning: isRejected 
-        ? "REJECTED due to massive forensic red flags. The summary is extremely brief, lacks specific dates, and contains spelling errors. The target entity does not exist in any SEC filings or corporate registries."
-        : `VERIFIED with high confidence. The submission offers verifiable claims. Cross-referencing ${targetEntity} against public filings confirms deep operational activity on the dates indicated. Secondary sources confirm background files.`,
-      red_flags: isRejected ? ["Lacks specific names/dates", "Extremely short summary", "Possible malicious vendetta"] : [],
-      recommended_followup: isRejected ? "Do not investigate." : "Review internal harbor registries for specific logistics tags.",
-      estimated_impact: isRejected ? 'LOW' : 'CRITICAL'
+    const realRecord: LeakRecord = {
+      leak_id: leakData.leak_id,
+      title: leakData.title,
+      category: leakData.category,
+      target_entity: leakData.target_entity,
+      summary: leakData.summary,
+      evidence_urls: leakData.evidence_urls,
+      document_hash: leakData.document_hash,
+      submitter_pubkey: leakData.submitter_pubkey,
+      submission_timestamp: leakData.submission_timestamp,
+      status: leakData.status,
+      credibility_score: leakData.credibility_score,
+      public_interest_score: leakData.public_interest_score,
+      ai_verdict: leakData.status,
+      ai_reasoning: leakData.ai_reasoning,
+      red_flags: leakData.red_flags || [],
+      recommended_followup: leakData.recommended_followup || "",
+      estimated_impact: leakData.estimated_impact || "LOW"
     };
 
-    addLog(`[AI GATEKEEPER] FORENSIC VERDICT COMPLETE: ${status}`);
-    addLog(`[AI GATEKEEPER] CREDIBILITY SCORE: ${score}/100`);
-    addLog(`[AI GATEKEEPER] PUBLIC INTEREST: ${pubInterest}/100`);
-    await new Promise(r => setTimeout(r, 800));
+    addLog(`[AI GATEKEEPER] FORENSIC VERDICT RESOLVED: ${realRecord.status}`);
+    addLog(`[AI GATEKEEPER] CREDIBILITY SCORE: ${realRecord.credibility_score}/100`);
+    addLog(`[AI GATEKEEPER] PUBLIC INTEREST: ${realRecord.public_interest_score}/100`);
+    await new Promise(r => setTimeout(r, 600));
 
-    // Update statistics
+    // Update global state
     set((state) => {
-      const updatedLeaks = status === 'VERIFIED' 
-        ? [simulatedRecord, ...state.verifiedLeaks] 
+      const updatedLeaks = realRecord.status === 'VERIFIED'
+        ? [realRecord, ...state.verifiedLeaks.filter(l => l.leak_id !== leakId)]
         : state.verifiedLeaks;
 
       const newStats = {
         total_leaks_submitted: state.stats.total_leaks_submitted + 1,
-        total_leaks_verified: status === 'VERIFIED' ? state.stats.total_leaks_verified + 1 : state.stats.total_leaks_verified,
-        total_leaks_rejected: status === 'REJECTED' ? state.stats.total_leaks_rejected + 1 : state.stats.total_leaks_rejected,
+        total_leaks_verified: realRecord.status === 'VERIFIED' ? state.stats.total_leaks_verified + 1 : state.stats.total_leaks_verified,
+        total_leaks_rejected: realRecord.status === 'REJECTED' ? state.stats.total_leaks_rejected + 1 : state.stats.total_leaks_rejected,
         total_bounty_pool: state.stats.total_bounty_pool,
         platform_owner: state.stats.platform_owner
       };
@@ -460,7 +515,306 @@ export const useStore = create<DeadDropState>((set, get) => ({
       };
     });
 
+    get().fetchStats();
+    get().fetchVerifiedLeaks();
+
     addLog("[SYSTEM] DEADDROP DISCONNECTED. OPSEC SECURED.");
-    return { success: true, leakId, record: simulatedRecord };
+    return { success: true, leakId, record: realRecord };
+  },
+
+  claimBountyCommit: async (leakId: string, seed: string) => {
+    const isAnon = get().isAnonymousMode;
+    const burner = get().burnerWallet;
+    const metaMask = get().metaMaskAddress;
+    const verifiedLeaks = get().verifiedLeaks;
+
+    const matchingLeak = verifiedLeaks.find(l => l.leak_id === leakId);
+    if (!matchingLeak) {
+      return { success: false, error: "Leak not found in verified registry" };
+    }
+
+    let signingPrivateKey: `0x${string}` | undefined;
+    let senderAddress: string = "";
+
+    if (isAnon) {
+      if (!burner) return { success: false, error: "No burner wallet available." };
+      signingPrivateKey = burner.privateKey as `0x${string}`;
+      senderAddress = burner.address;
+    } else {
+      if (!metaMask) return { success: false, error: "MetaMask not connected." };
+      senderAddress = metaMask;
+    }
+
+    // Compute commit hash: sha256(seed + senderAddress)
+    const dataToHash = seed + senderAddress;
+    const commitHash = CryptoJS.SHA256(dataToHash).toString(CryptoJS.enc.Hex);
+
+    try {
+      const glClient = getGenLayerClient(signingPrivateKey);
+      if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
+        console.log(`[MOCK] Staging commit: ${commitHash}`);
+        return { success: true, commitHash };
+      }
+
+      const txHash = await glClient.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'claim_bounty',
+        args: [leakId, matchingLeak.submitter_pubkey, `commit:${commitHash}`],
+        value: BigInt(0)
+      });
+
+      await glClient.waitForTransactionReceipt({
+        hash: txHash as any,
+        status: "FINALIZED" as any,
+        retries: 45,
+        interval: 3000
+      });
+
+      return { success: true, commitHash };
+    } catch (e: any) {
+      console.error(e);
+      return { success: false, error: e.message || "Failed to commit bounty claim." };
+    }
+  },
+
+  claimBountyReveal: async (leakId: string, seed: string) => {
+    const isAnon = get().isAnonymousMode;
+    const burner = get().burnerWallet;
+    const metaMask = get().metaMaskAddress;
+    const verifiedLeaks = get().verifiedLeaks;
+
+    const matchingLeak = verifiedLeaks.find(l => l.leak_id === leakId);
+    if (!matchingLeak) {
+      return { success: false, error: "Leak not found in verified registry" };
+    }
+
+    let signingPrivateKey: `0x${string}` | undefined;
+    if (isAnon) {
+      if (!burner) return { success: false, error: "No burner wallet available." };
+      signingPrivateKey = burner.privateKey as `0x${string}`;
+    } else {
+      if (!metaMask) return { success: false, error: "MetaMask not connected." };
+    }
+
+    try {
+      const glClient = getGenLayerClient(signingPrivateKey);
+      if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
+        console.log(`[MOCK] Staging reveal for seed: ${seed}`);
+        return { success: true };
+      }
+
+      const txHash = await glClient.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'claim_bounty',
+        args: [leakId, matchingLeak.submitter_pubkey, `reveal:${seed}`],
+        value: BigInt(0)
+      });
+
+      await glClient.waitForTransactionReceipt({
+        hash: txHash as any,
+        status: "FINALIZED" as any,
+        retries: 45,
+        interval: 3000
+      });
+
+      get().fetchStats();
+      get().fetchVerifiedLeaks();
+      return { success: true };
+    } catch (e: any) {
+      console.error(e);
+      return { success: false, error: e.message || "Failed to reveal bounty claim." };
+    }
+  },
+
+  withdrawBounty: async () => {
+    const isAnon = get().isAnonymousMode;
+    const burner = get().burnerWallet;
+    const metaMask = get().metaMaskAddress;
+
+    let signingPrivateKey: `0x${string}` | undefined;
+    if (isAnon) {
+      if (!burner) return { success: false, error: "No burner wallet available." };
+      signingPrivateKey = burner.privateKey as `0x${string}`;
+    } else {
+      if (!metaMask) return { success: false, error: "MetaMask not connected." };
+    }
+
+    try {
+      const glClient = getGenLayerClient(signingPrivateKey);
+      if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
+        console.log("[MOCK] Staging withdrawal");
+        return { success: true, amount: "5.0" };
+      }
+
+      const txHash = await glClient.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'withdraw',
+        args: [],
+        value: BigInt(0)
+      });
+
+      await glClient.waitForTransactionReceipt({
+        hash: txHash as any,
+        status: "FINALIZED" as any,
+        retries: 45,
+        interval: 3000
+      });
+
+      return { success: true };
+    } catch (e: any) {
+      console.error(e);
+      return { success: false, error: e.message || "Failed to withdraw funds." };
+    }
+  },
+
+  getWithdrawableBalance: async (address: string) => {
+    try {
+      const glClient = getGenLayerClient();
+      if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
+        return "0";
+      }
+      const balance = await glClient.readContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'get_withdrawable_balance',
+        args: [address]
+      });
+      return balance ? balance.toString() : "0";
+    } catch (e) {
+      console.error(e);
+      return "0";
+    }
+  },
+
+  fundLeakBounty: async (leakId: string, amount: string) => {
+    const isAnon = get().isAnonymousMode;
+    const burner = get().burnerWallet;
+    const metaMask = get().metaMaskAddress;
+
+    let signingPrivateKey: `0x${string}` | undefined;
+    if (isAnon) {
+      if (!burner) return { success: false, error: "No burner wallet available." };
+      signingPrivateKey = burner.privateKey as `0x${string}`;
+    } else {
+      if (!metaMask) return { success: false, error: "MetaMask not connected." };
+    }
+
+    try {
+      const glClient = getGenLayerClient(signingPrivateKey);
+      const weiAmount = BigInt(parseFloat(amount) * 1e18);
+
+      if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
+        console.log(`[MOCK] Staging leak funding: ${amount} GEN`);
+        return { success: true };
+      }
+
+      const txHash = await glClient.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'fund_leak_bounty',
+        args: [leakId],
+        value: weiAmount
+      });
+
+      await glClient.waitForTransactionReceipt({
+        hash: txHash as any,
+        status: "FINALIZED" as any,
+        retries: 45,
+        interval: 3000
+      });
+
+      get().fetchStats();
+      return { success: true };
+    } catch (e: any) {
+      console.error(e);
+      return { success: false, error: e.message || "Failed to fund leak bounty." };
+    }
+  },
+
+  fundBountyPool: async (category: string, amount: string) => {
+    const isAnon = get().isAnonymousMode;
+    const burner = get().burnerWallet;
+    const metaMask = get().metaMaskAddress;
+
+    let signingPrivateKey: `0x${string}` | undefined;
+    if (isAnon) {
+      if (!burner) return { success: false, error: "No burner wallet available." };
+      signingPrivateKey = burner.privateKey as `0x${string}`;
+    } else {
+      if (!metaMask) return { success: false, error: "MetaMask not connected." };
+    }
+
+    try {
+      const glClient = getGenLayerClient(signingPrivateKey);
+      const weiAmount = BigInt(parseFloat(amount) * 1e18);
+
+      if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
+        console.log(`[MOCK] Staging category funding: ${amount} GEN`);
+        return { success: true };
+      }
+
+      const txHash = await glClient.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'fund_bounty_pool',
+        args: [category],
+        value: weiAmount
+      });
+
+      await glClient.waitForTransactionReceipt({
+        hash: txHash as any,
+        status: "FINALIZED" as any,
+        retries: 45,
+        interval: 3000
+      });
+
+      get().fetchStats();
+      return { success: true };
+    } catch (e: any) {
+      console.error(e);
+      return { success: false, error: e.message || "Failed to fund category pool." };
+    }
+  },
+
+  appealRejection: async (leakId: string, additionalEvidenceUrls: string[]) => {
+    const isAnon = get().isAnonymousMode;
+    const burner = get().burnerWallet;
+    const metaMask = get().metaMaskAddress;
+
+    let signingPrivateKey: `0x${string}` | undefined;
+    if (isAnon) {
+      if (!burner) return { success: false, error: "No burner wallet available." };
+      signingPrivateKey = burner.privateKey as `0x${string}`;
+    } else {
+      if (!metaMask) return { success: false, error: "MetaMask not connected." };
+    }
+
+    try {
+      const glClient = getGenLayerClient(signingPrivateKey);
+      const appealFee = BigInt(5 * 1e18); // Exactly 5 GEN stake
+
+      if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
+        console.log(`[MOCK] Staging appeal with urls: ${additionalEvidenceUrls}`);
+        return { success: true };
+      }
+
+      const txHash = await glClient.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'appeal_rejection',
+        args: [leakId, JSON.stringify(additionalEvidenceUrls)],
+        value: appealFee
+      });
+
+      await glClient.waitForTransactionReceipt({
+        hash: txHash as any,
+        status: "FINALIZED" as any,
+        retries: 45,
+        interval: 3000
+      });
+
+      get().fetchStats();
+      get().fetchVerifiedLeaks();
+      return { success: true };
+    } catch (e: any) {
+      console.error(e);
+      return { success: false, error: e.message || "Failed to appeal leak rejection." };
+    }
   }
 }));

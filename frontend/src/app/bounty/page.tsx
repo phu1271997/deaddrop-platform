@@ -7,7 +7,18 @@ import { Award, Gift, DollarSign, Wallet, ShieldAlert, Key, HelpCircle, CheckCir
 import CryptoJS from 'crypto-js';
 
 export default function BountyDashboard() {
-  const { stats, verifiedLeaks, initializeStore } = useStore();
+  const { 
+    stats, 
+    verifiedLeaks, 
+    initializeStore, 
+    fundBountyPool, 
+    claimBountyCommit, 
+    claimBountyReveal,
+    burnerWallet,
+    metaMaskAddress,
+    isAnonymousMode 
+  } = useStore();
+  
   const [mounted, setMounted] = useState(false);
 
   // Fund states
@@ -45,13 +56,16 @@ export default function BountyDashboard() {
 
     setIsFunding(true);
     try {
-      // Simulate/execute payable write contract
-      await new Promise(r => setTimeout(r, 1500));
-      alert(`Bounty pool for ${fundCategory} funded with ${fundAmount} GEN successfully!`);
-      setFundAmount("");
-    } catch (e) {
+      const res = await fundBountyPool(fundCategory, fundAmount);
+      if (res.success) {
+        alert(`Bounty pool for ${fundCategory} funded with ${fundAmount} GEN successfully!`);
+        setFundAmount("");
+      } else {
+        alert(`Failed to fund bounty pool: ${res.error}`);
+      }
+    } catch (e: any) {
       console.error(e);
-      alert("Failed to fund bounty pool.");
+      alert(`Failed to fund bounty pool: ${e.message}`);
     } finally {
       setIsFunding(false);
     }
@@ -81,7 +95,7 @@ export default function BountyDashboard() {
     setClaimLogs([]);
     setClaimStep(1);
     addClaimLog("INITIALIZING CRYPTOGRAPHIC CLAIM PROTOCOL...");
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 600));
 
     // Calculate details
     const pubkey = CryptoJS.SHA256(claimSeed).toString(CryptoJS.enc.Hex);
@@ -89,40 +103,66 @@ export default function BountyDashboard() {
       addClaimLog("❌ ERROR: SEED HASH DOES NOT MATCH SUBMITTER PUBKEY");
       addClaimLog("VERIFICATION FAILED. SECURITY ABORT.");
       setIsClaiming(false);
+      setClaimStep(0);
       return;
     }
     addClaimLog("✓ VERIFIED: SEED KEY HASH MATCHES SUBMITTER IDENTIFIER.");
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 400));
 
-    // Staging recipient wallet (simulate burner wallet destination)
-    const recipient = "0x8922...f922";
-    addClaimLog(`LOCKING IN PAYOUT RECIPIENT WALLET COORDINATES: ${recipient}`);
-    await new Promise(r => setTimeout(r, 600));
+    // Staging recipient wallet (use active wallet)
+    const recipient = isAnonymousMode ? burnerWallet?.address : metaMaskAddress;
+    if (!recipient) {
+      addClaimLog("❌ ERROR: NO WALLET CONNECTED. PLEASE SECURE AN IDENTITY FIRST.");
+      setIsClaiming(false);
+      setClaimStep(0);
+      return;
+    }
+    addClaimLog(`LOCKING IN PAYOUT RECIPIENT WALLET: ${recipient}`);
+    await new Promise(r => setTimeout(r, 400));
 
-    // Step 1: Commit Phase
-    const dataToHash = claimSeed + recipient;
-    const commitHash = CryptoJS.SHA256(dataToHash).toString(CryptoJS.enc.Hex);
-    addClaimLog(`COMPUTED COMMITMENT HASH: ${commitHash}`);
-    addClaimLog("CALLING claim_bounty WITH COMMIT COORDINATES...");
-    await new Promise(r => setTimeout(r, 1200));
-    addClaimLog("✓ COMMIT STAGED AND WRITTEN ON-CHAIN.");
-    addClaimLog("WAITING FOR TRANSACTION FINALIZATION (PREVENT MEMPOOL FRONTRUNNING)...");
-    await new Promise(r => setTimeout(r, 1500));
+    try {
+      // Step 1: Commit Phase
+      addClaimLog("SUBMITTING COMMIT TRANSACTION TO BLOCKCHAIN...");
+      const commitRes = await claimBountyCommit(claimLeakId, claimSeed);
+      if (!commitRes.success) {
+        addClaimLog(`❌ COMMIT FAILED: ${commitRes.error}`);
+        setIsClaiming(false);
+        setClaimStep(0);
+        return;
+      }
 
-    // Step 2: Reveal Phase
-    setClaimStep(2);
-    addClaimLog("TX FINALIZED! REVEAL PHASE INITIALIZED.");
-    addClaimLog("SENDING EXPOSED REVEAL SEED SIGNATURE TO INTEL LEDGER...");
-    await new Promise(r => setTimeout(r, 1200));
-    addClaimLog("✓ VALIDATING REVEAL SEED AGAINST PREVIOUS COMMIT ON-CHAIN...");
-    await new Promise(r => setTimeout(r, 1000));
-    addClaimLog("✓ REVEAL MATCHED SUCCESS! VALIDATORS APPROVED CONSENSUS.");
+      addClaimLog(`COMPUTED COMMITMENT HASH: ${commitRes.commitHash}`);
+      addClaimLog("✓ COMMIT STAGED AND WRITTEN ON-CHAIN.");
+      addClaimLog("WAITING FOR TRANSACTION FINALIZATION (PREVENT MEMPOOL FRONTRUNNING)...");
+      await new Promise(r => setTimeout(r, 1000));
 
-    // Execution pay out
-    setClaimStep(3);
-    addClaimLog("✓ BOUNTY POOL BALANCES RELEASED TO RECIPIENT DESTINATION!");
-    addClaimLog("DEADDROP TRANSMITTER Purged. SAFETY DISCONNECTED.");
-    setIsClaiming(false);
+      // Step 2: Reveal Phase
+      setClaimStep(2);
+      addClaimLog("TX FINALIZED! REVEAL PHASE INITIALIZED.");
+      addClaimLog("SENDING EXPOSED REVEAL SEED TO BLOCKCHAIN INTEL LEDGER...");
+      
+      const revealRes = await claimBountyReveal(claimLeakId, claimSeed);
+      if (!revealRes.success) {
+        addClaimLog(`❌ REVEAL FAILED: ${revealRes.error}`);
+        setIsClaiming(false);
+        setClaimStep(1); // rollback to commit step
+        return;
+      }
+
+      addClaimLog("✓ VALIDATING REVEAL SEED AGAINST PREVIOUS COMMIT ON-CHAIN...");
+      await new Promise(r => setTimeout(r, 600));
+      addClaimLog("✓ REVEAL MATCHED SUCCESS! VALIDATORS APPROVED CONSENSUS.");
+
+      // Execution pay out
+      setClaimStep(3);
+      addClaimLog("✓ BOUNTY POOL BALANCES RELEASED TO RECIPIENT DESTINATION!");
+      addClaimLog("DEADDROP TRANSMITTER PURGED. SAFETY DISCONNECTED.");
+    } catch (err: any) {
+      addClaimLog(`❌ TRANSACTION ERROR: ${err.message || err}`);
+      setClaimStep(0);
+    } finally {
+      setIsClaiming(false);
+    }
   };
 
   // Mock Bounty pools dashboard details

@@ -8,6 +8,7 @@ import AnonymousModeToggle from '@/components/AnonymousModeToggle';
 import BurnerWalletGenerator from '@/components/BurnerWalletGenerator';
 import EvidenceUploader from '@/components/EvidenceUploader';
 import AIVerdictDisplay from '@/components/AIVerdictDisplay';
+import ChainVerifyButton from '@/components/ChainVerifyButton';
 import { ShieldAlert, Flame, FileText, ArrowRight, Check, AlertTriangle, Key, Cpu, HelpCircle, Download } from 'lucide-react';
 import Link from 'next/link';
 
@@ -527,6 +528,9 @@ export default function SubmitLeak() {
 
             {/* Verdict Visualization Panel */}
             <AIVerdictDisplay verdict={resultRecord} />
+
+            {/* On-Chain verification trigger */}
+            <ChainVerifyButton leakId={resultRecord.leak_id} localData={resultRecord} />
 
             {/* CryptographicReceipt receipt coordinates */}
             <div className="mt-5 p-4 bg-background border border-background-border rounded space-y-2">
